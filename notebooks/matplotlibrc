@@ -1,0 +1,38 @@
+# Figure style for every notebook in this directory. Matplotlib reads this
+# automatically from the working directory, so no notebook has to import a
+# style helper or repeat an rcParams block.
+
+figure.dpi:         150
+savefig.dpi:        400
+savefig.bbox:       tight
+savefig.pad_inches: 0.01
+
+font.family:      serif
+font.serif:       Times New Roman, DejaVu Serif
+mathtext.fontset: cm
+font.size:        8
+axes.labelsize:   8
+axes.titlesize:   8
+xtick.labelsize:  7
+ytick.labelsize:  7
+legend.fontsize:  7
+
+legend.frameon:       False
+legend.handlelength:  1.4
+legend.columnspacing: 1.2
+
+axes.spines.top:   False
+axes.spines.right: False
+axes.linewidth:    0.6
+
+# Colourblind-safe, ordered so the first two are the pair usually contrasted.
+axes.prop_cycle: cycler('color', ['0173B2', 'DE8F05', '029E73', 'CC78BC', '949494', 'D55E00'])
+
+xtick.major.width: 0.6
+ytick.major.width: 0.6
+xtick.major.size:  2.5
+ytick.major.size:  2.5
+lines.linewidth:   1.2
+lines.markersize:  3.5
+grid.linewidth:    0.4
+grid.alpha:        0.25
