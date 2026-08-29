@@ -1,6 +1,7 @@
 data/raw/*
 data/processed/*
 !**/README.md
+! conforming.png
 results/
 
 __pycache__/
