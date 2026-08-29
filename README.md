@@ -1,6 +1,6 @@
 # uq4wind
 
-Conformalise native uncertainty quantification (UQ) bands for reliable wind power forecasts 
+Conformalise native uncertainty quantification (UQ) bands for more reliable wind power forecasts - regardless of your underlying model
 
 #### Installation
 
