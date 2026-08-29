@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uq4wind"
+version = "1.0.0"
+description = "Conformalising native uncertainty for GB wind power"
+requires-python = ">=3.12"
+dependencies = [
+    "joblib>=1.4.2",
+    "lightgbm>=4.6.0",
+    "matplotlib>=3.9.1",
+    "numpy>=2.3.2",
+    # Upper bounds track tabpfn-client's pins, so the hosted subject stays usable here.
+    "pandas>=2.1.2,<=2.3.3",
+    "pyarrow>=14.0.0,<=23.0.1",
+    "scipy>=1.15.2",
+    "statsmodels>=0.14.4",
+]
+
+[project.scripts]
+uq4wind-prepare = "uq4wind.cli.prepare_data:main"
+uq4wind-backtest = "uq4wind.cli.run_backtest:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[dependency-groups]
+# Only scripts/prepare_data.py needs these.
+data = ["dask>=2026.7.1", "dynamical-catalog>=0.8.0", "xarray>=2026.7.0"]
+
+# Only scripts/run_tabpfn.py needs this, and it needs an API key.
+tabpfn = ["tabpfn-client>=0.4.1"]
+
+notebooks = ["marimo>=0.24.0"]
