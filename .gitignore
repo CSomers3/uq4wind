@@ -1,0 +1,9 @@
+data/raw/*
+data/processed/*
+!**/README.md
+results/
+
+__pycache__/
+.ipynb_checkpoints/
+.venv/
+__marimo__/
