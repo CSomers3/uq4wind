@@ -1,6 +1,8 @@
 # uq4wind
 
 Conformalise native uncertainty quantification (UQ) bands for more reliable wind power forecasts - regardless of your underlying model
+![conformalised_native_uq](https://github.com/CSomers3/uq4wind/blob/main/conforming.png)
+
 
 #### Installation
 
