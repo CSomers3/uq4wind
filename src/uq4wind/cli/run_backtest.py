@@ -1,17 +1,12 @@
 """Run the expanding-window backtest and write the forecast stream.
 
-Five subjects run by default. TabPFN is the sixth and needs `--tabpfn`, because it is a
-hosted service wanting TABPFN_API_KEY. It is checkpointed per horizon, so hitting the daily
-cap costs one horizon rather than the run, and the checkpoint name carries a digest of the
-inputs behind it so a changed input is recomputed rather than silently reused.
-
-Penmanshiel's record starts later than Kelmarsh's, so at the default 730D no retrain window
-ever opens and the run fails rather than writing an empty file.
+Five subjects run by default. TabPFN, a hosted service, needs `--tabpfn` and TABPFN_API_KEY;
+it is checkpointed per horizon under a digest of its inputs. Penmanshiel needs a 365D window.
 
 Usage:
-    python scripts/run_backtest.py kelmarsh
-    python scripts/run_backtest.py penmanshiel --min-train-window 365D
-    TABPFN_API_KEY=... python scripts/run_backtest.py kelmarsh --tabpfn
+    uq4wind-backtest kelmarsh
+    uq4wind-backtest penmanshiel --min-train-window 365D
+    TABPFN_API_KEY=... uq4wind-backtest kelmarsh --tabpfn
 """
 
 from __future__ import annotations
@@ -58,7 +53,7 @@ def run_standard(farm, capacity_factor, nwp_grid, features, targets, schedule) -
             ).assign(model=name)
         )
 
-    # This subject reads a different set of members per horizon, so it runs one at a time.
+    # GEFS members differ by horizon.
     print("gefs_power_curve...", flush=True)
     for horizon in F.HORIZONS:
         member_speeds = D.nwp_ensemble_speeds(

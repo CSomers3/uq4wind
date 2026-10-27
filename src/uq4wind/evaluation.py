@@ -34,13 +34,12 @@ METHODS = {
     "mondrian": "Mondrian-OSSCP",
 }
 
-#: The rules OSSCP is compared against. Native is the subject, Mondrian partitions rather than adapts.
+#: The rules OSSCP is compared against; Mondrian partitions rather than adapts.
 ADAPTIVE_METHODS = ("nexcp", "aci_0.01", "aci_0.05", "agaci", "dtaci")
 
 HORIZON_LABELS = {1: "30 min", 6: "3 h", 48: "24 h"}
 LEDGER_HORIZON = 48
 
-#: Fixed cut points either side of partial load, so "high wind" names one regime at both farms.
 WIND_BANDS = (0.0, 5.0, 11.0, np.inf)
 WIND_LABELS = ("Low (0-5 m/s)", "Average (5-11 m/s)", "High (11+ m/s)")
 
@@ -52,12 +51,29 @@ def winkler_score(y, lower, upper, alpha: float = ALPHA) -> np.ndarray:
 
 
 def feedback_delay(horizon: int, issue_every: int = ISSUE_EVERY) -> int:
-    """Stream steps that must pass before a horizon's error is known.
-
-    A settlement period is left-labelled, so the mean stamped t + horizon is not complete
-    until one period after that. The extra period is what removes the look-ahead.
-    """
+    """Stream steps before a horizon's error is known; a left-labelled period closes one period late."""
     return max(1, -(-(horizon + 1) // issue_every))
+
+
+def ratio_interval(numerator, denominator, blocks, draws: int = 2000, level: float = 0.95, seed: int = 0):
+    """sum(numerator) / sum(denominator) with a block bootstrap interval: (estimate, low, high)."""
+    by = pd.DataFrame({"num": numerator, "den": denominator, "block": blocks}).groupby("block")
+    num, den = by["num"].sum().to_numpy(float), by["den"].sum().to_numpy(float)
+    picks = np.random.default_rng(seed).integers(0, len(num), (draws, len(num)))
+    resampled = num[picks].sum(axis=1) / den[picks].sum(axis=1)
+    tail = (1 - level) / 2 * 100
+    return float(num.sum() / den.sum()), *np.percentile(resampled, [tail, 100 - tail])
+
+
+def week_of(issue_time: pd.Series) -> pd.Series:
+    """The calendar week a row was issued in, the bootstrap block."""
+    return issue_time.dt.tz_convert(None).dt.to_period("W").astype(str)
+
+
+def coverage_interval(frame: pd.DataFrame, **kwargs):
+    """Share of rows inside their band, with a weekly block-bootstrap interval. (estimate, low, high)."""
+    covered = (frame["y_true"] >= frame["y_lower"]) & (frame["y_true"] <= frame["y_upper"])
+    return ratio_interval(covered, np.ones(len(frame)), week_of(frame["issue_time"]), **kwargs)
 
 
 def wind_band(wind_speed: pd.Series) -> pd.Series:
@@ -77,11 +93,7 @@ def attach_conditions(evaluated: pd.DataFrame, nwp_grid: pd.DataFrame) -> pd.Dat
 
 
 def attach_realised_band(evaluated: pd.DataFrame, realised_wind: pd.Series) -> pd.DataFrame:
-    """The band the outturn fell in, against the forecast band Mondrian calibrated within.
-
-    Calibration can only use what the issue time knew, so a Mondrian arm is audited on a
-    partition it was never allowed to see. The gap between the two is the taxonomy's error.
-    """
+    """The wind band ERA5 says the target period fell in; for auditing only, never calibration."""
     target_time = evaluated["issue_time"] + evaluated["horizon"] * SETTLEMENT_STEP
     return evaluated.assign(
         wind_speed_realised=target_time.map(realised_wind),
@@ -102,19 +114,10 @@ def _base_interval(group: pd.DataFrame):
 def conformalize(
     stream: pd.DataFrame,
     methods: dict,
-    alpha: float = ALPHA,
     stratum: str | None = None,
     **loop_kwargs,
 ) -> pd.DataFrame:
-    """Wrap every rule around every stream, returning wrapped intervals alongside the native one.
-
-    Each stream is conformalised on its own with the feedback delay set from its horizon.
-    The native interval is emitted over exactly the rows the wrapped ones cover, so the
-    comparison is on one sample.
-
-    Neither the target nor the intervals are clipped to [0, 1]. Clipping puts an atom at a
-    conformity score of exactly zero for a subject whose band is already censored there,
-    which straddles the level the quantile is read at and makes the wrapper the identity.
+    """Wrap every rule around every stream, with the native band on the same scored rows.
 
     Returns one row per (farm, model, horizon, method, issue_time).
     """
@@ -140,8 +143,10 @@ def conformalize(
             methods,
             lower_base=lower_base,
             upper_base=upper_base,
-            feedback_delay=feedback_delay(horizon),
             strata=strata,
+            feedback_delay=feedback_delay(horizon),
+            issue_steps=(group["issue_time"] - group["issue_time"].iloc[0]).to_numpy()
+            / (ISSUE_EVERY * SETTLEMENT_STEP).to_timedelta64(),
             **loop_kwargs,
         )
 
@@ -201,16 +206,12 @@ def load_stream(farm: str) -> pd.DataFrame:
 
 
 def evaluate(farm: str, alpha: float = ALPHA) -> pd.DataFrame:
-    """Conformalise every subject at one farm, and label each row by realised wind band.
-
-    The forecast wind band is attached before wrapping, not after: Mondrian calibrates
-    within it, so it has to be on the stream the loop walks.
-    """
+    """Conformalise every subject at one farm, and label each row by realised wind band."""
     stream = load_stream(farm)
     stream = attach_conditions(stream, pd.read_parquet(PROCESSED / f"{farm}_gefs_grid.parquet"))
     stream["band"] = wind_band(stream["wind_speed"])
 
-    wrapped = conformalize(stream, default_methods(alpha), alpha=alpha, stratum="band")
+    wrapped = conformalize(stream, default_methods(alpha), stratum="band")
     realised = pd.read_parquet(PROCESSED / f"{farm}_era5_wind_30min.parquet")
     return attach_realised_band(wrapped, realised["wind_speed_realised"])
 
@@ -226,3 +227,31 @@ def labelled(frame: pd.DataFrame, methods=tuple(METHODS)) -> pd.DataFrame:
     if "horizon" in out:
         out["horizon"] = out["horizon"].map(HORIZON_LABELS)
     return out.rename(columns={"model": "Subject", "method": "Method"})
+
+
+TEX_LABELS = {
+    "ACI (gamma=0.01)": r"ACI ($\gamma=0.01$)",
+    "ACI (gamma=0.05)": r"ACI ($\gamma=0.05$)",
+    "Low (0-5 m/s)": "Low (0--5 m/s)",
+    "Average (5-11 m/s)": "Average (5--11 m/s)",
+    "High (11+ m/s)": "High (11+ m/s)",
+    "kelmarsh": "Kelmarsh",
+    "penmanshiel": "Penmanshiel",
+    "coverage": "Coverage",
+    "width": "Width",
+    "winkler": "Winkler Score",
+}
+
+
+def write_latex(table: pd.DataFrame, path, float_format: str = "%.2f") -> None:
+    """Write a paper table as a LaTeX tabular, index left, numbers centred."""
+    table = table.rename(index=TEX_LABELS, columns=TEX_LABELS)
+    table.columns.names = [None] * table.columns.nlevels
+    latex = table.to_latex(
+        column_format="@{}" + "l" * table.index.nlevels + "c" * table.shape[1] + "@{}",
+        multirow=True,
+        multicolumn_format="c",
+        escape=False,
+        float_format=float_format,
+    )
+    path.write_text(latex.replace(r"\cline", r"\cmidrule"), encoding="utf-8")

@@ -1,6 +1,4 @@
-# Figure style for every notebook in this directory. Matplotlib reads this
-# automatically from the working directory, so no notebook has to import a
-# style helper or repeat an rcParams block.
+# Shared paper figure style, loaded explicitly by each notebook.
 
 figure.dpi:         150
 savefig.dpi:        400
@@ -8,7 +6,7 @@ savefig.bbox:       tight
 savefig.pad_inches: 0.01
 
 font.family:      serif
-font.serif:       Times New Roman, DejaVu Serif
+font.serif:       Times New Roman, Liberation Serif, DejaVu Serif
 mathtext.fontset: cm
 font.size:        8
 axes.labelsize:   8
@@ -36,3 +34,5 @@ lines.linewidth:   1.2
 lines.markersize:  3.5
 grid.linewidth:    0.4
 grid.alpha:        0.25
+
+pdf.fonttype: 42

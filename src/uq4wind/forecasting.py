@@ -30,10 +30,8 @@ MIN_TRAIN_ROWS = 100
 
 ARIMA_ORDER_GRID = list(itertools.product((0, 1, 2), (0, 1), (0, 1, 2)))
 
-#: Searching the grid over the full expanding history at every refit would dominate the backtest.
 ARIMA_ORDER_SEARCH_ROWS = 5000
 
-#: Bounding the Kalman re-filter keeps cost per issue time constant.
 ARIMA_FILTER_ROWS = 512
 
 POWER_LAG_STEPS = (0, 1, 2, 6, 48)
@@ -41,12 +39,10 @@ ROLLING_WINDOW_STEPS = 6
 
 LGBM_PARAMS = {"n_estimators": 200, "max_depth": 5, "learning_rate": 0.05, "verbosity": -1}
 
-#: 20 members leave each row out of bag in roughly seven of them.
 ENBPI_ENSEMBLE_SIZE = 20
 
 PHYSICAL_RANGE = (0.0, 1.0)
 
-#: The power curve is one-dimensional and monotone, so shrinkage rides on estimator count.
 POWER_CURVE_PARAMS = {
     "n_estimators": 300,
     "num_leaves": 15,
@@ -54,7 +50,7 @@ POWER_CURVE_PARAMS = {
     "verbosity": -1,
 }
 
-#: EMOS start values for (a, b, c, d) in mu = a + b*m, sigma^2 = c^2 + d^2*s^2.
+#: (a, b, c, d) in mu = a + b*m, sigma^2 = c^2 + d^2*s^2.
 EMOS_INIT = (0.0, 1.0, 0.1, 1.0)
 EMOS_MAX_ITER = 200
 EMOS_MIN_VARIANCE = 1e-8
@@ -64,7 +60,6 @@ REFERENCE_AIR_DENSITY = 1.225
 GAS_CONSTANT_DRY_AIR = 287.05
 CELSIUS_TO_KELVIN = 273.15
 
-#: Pinned rather than the service's "auto" default, which is free to change under a rerun.
 TABPFN_MODEL_PATH = "v3_default"
 TABPFN_MAX_TRAIN_ROWS = 100_000
 TABPFN_N_ESTIMATORS = 8
@@ -108,7 +103,6 @@ def build_features(
     features["nwp_spread_80m"] = nwp["nwp_spread_80m"]
     features["nwp_spread_range_80m"] = nwp["nwp_spread_p90_80m"] - nwp["nwp_spread_p10_80m"]
 
-    # Spread relative to the level it surrounds: 2 m/s is near-total uncertainty at 3 m/s.
     features["nwp_spread_relative"] = nwp["nwp_spread_80m"] / nwp["wind_speed_80m"].clip(lower=0.1)
 
     features["nwp_lead_hours"] = nwp["nwp_lead_hours"]
@@ -123,7 +117,7 @@ def build_horizon_targets(power: pd.Series, horizons: tuple[int, ...]) -> pd.Dat
 
 
 def _ordered_band(point, lower, upper):
-    """Sort a pair of endpoints fitted independently, which cross on a few rows in tens of thousands."""
+    """Sort independently fitted endpoints, which can cross."""
     return point, np.minimum(lower, upper), np.maximum(lower, upper)
 
 
@@ -149,11 +143,7 @@ class PersistenceForecaster:
 
 
 class ARIMAForecaster:
-    """Iterative ARIMA with the Gaussian interval implied by its state-space covariance.
-
-    The (p, d, q) order is grid-searched by AIC on the first fit and reused, so the model
-    form is selected once from the earliest history.
-    """
+    """ARIMA with its state-space Gaussian interval; the order is chosen by AIC on the first fit."""
 
     def __init__(self, alpha: float = ALPHA, order_grid=ARIMA_ORDER_GRID):
         self.alpha = alpha
@@ -194,14 +184,7 @@ class ARIMAForecaster:
 
 
 class BootstrapEnsembleForecaster:
-    """Bootstrapped LightGBM members, banded by a quantile of their out-of-bag residuals.
-
-    Bagging spread alone is the sampling variance of the fitted mean, so it shrinks as the
-    members agree whatever the noise level is. The out-of-bag residual is the irreducible
-    noise they share. That quantile is fixed for the life of a fit, so this subject
-    publishes no flow-dependent band, and the online adaptation it lacks is exactly what
-    the wrappers around it supply.
-    """
+    """Bootstrapped LightGBM members, banded by a quantile of their out-of-bag residuals."""
 
     def __init__(
         self,
@@ -249,12 +232,7 @@ class BootstrapEnsembleForecaster:
 
 
 class QuantileIntervalForecaster:
-    """LightGBM under pinball loss at both tails.
-
-    The point forecast comes from a separate squared-error fit rather than a median tail,
-    because point accuracy is reported as RMSE and this target's median sits well under
-    its mean.
-    """
+    """LightGBM under pinball loss at both tails, with a squared-error fit for the point."""
 
     def __init__(self, alpha: float, lgbm_params: dict = LGBM_PARAMS):
         self.alpha = alpha
@@ -285,17 +263,9 @@ class QuantileIntervalForecaster:
 
 
 class EnsemblePowerCurveForecaster:
-    """31 GEFS members through a density-corrected, monotone power curve, banded by EMOS.
+    """31 GEFS members through a fitted, density-corrected, monotone power curve, banded by EMOS.
 
-    The curve is fitted at farm level rather than taken from a datasheet, since the target
-    carries wake losses, availability and an 80m-to-hub-height mismatch.
-
-    Raw member quantiles are not the published band: they carry initial-condition
-    uncertainty alone and cover roughly half of nominal. The members are post-processed by
-    EMOS in the censored form standard for a bounded target, a normal censored to
-    PHYSICAL_RANGE whose location is affine in the ensemble mean and whose variance is
-    affine in the ensemble variance. The coefficients are fitted out of fold so the band
-    being wrapped is not flattered by its own training residuals.
+    EMOS is a normal censored to PHYSICAL_RANGE, fitted out of fold. The point is its mean.
     """
 
     def __init__(
@@ -316,7 +286,7 @@ class EnsemblePowerCurveForecaster:
         return X["pressure_80m"].to_numpy(float) / (GAS_CONSTANT_DRY_AIR * kelvin)
 
     def _corrected(self, speed: np.ndarray, X: pd.DataFrame) -> np.ndarray:
-        """Speed normalised to reference density; power goes as density times speed cubed."""
+        """Speed normalised to reference density."""
         return speed * (self._density(X) / REFERENCE_AIR_DENSITY) ** (1 / 3)
 
     def _member_matrix(self, X: pd.DataFrame) -> np.ndarray:
@@ -332,20 +302,13 @@ class EnsemblePowerCurveForecaster:
     def _through(curve: LGBMRegressor, speeds: np.ndarray) -> np.ndarray:
         return curve.predict(speeds.reshape(-1, 1)).reshape(speeds.shape)
 
-    def _through_curve(self, speeds: np.ndarray) -> np.ndarray:
-        return self._through(self.curve_, speeds)
-
     def _ensemble_moments(self, X: pd.DataFrame):
-        """Mean and variance of the members through the curve; the curve is nonlinear, so order matters."""
-        power = self._through_curve(self._member_matrix(X))
+        """Mean and variance of the members through the curve."""
+        power = self._through(self.curve_, self._member_matrix(X))
         return np.nanmean(power, axis=0), np.nanvar(power, axis=0)
 
     def _out_of_fold_moments(self, X_train: pd.DataFrame, y_train: pd.Series):
-        """The same moments, from curves that never saw the row they are scoring.
-
-        Folds are contiguous blocks, so a held-out fold is a stretch of time the curve
-        behind it was not trained on.
-        """
+        """The same moments, from curves fitted on the other contiguous folds."""
         speed = self._corrected(X_train["wind_speed_80m"].to_numpy(float), X_train)
         members = self._member_matrix(X_train)
         rows = np.arange(len(X_train))
@@ -366,7 +329,6 @@ class EnsemblePowerCurveForecaster:
         mu = a + b * m
         sigma = np.sqrt(c**2 + d**2 * s2 + EMOS_MIN_VARIANCE)
         low, high = PHYSICAL_RANGE
-        # Censoring puts the mass past each bound onto the bound itself, not into a density.
         log_likelihood = np.where(
             y <= low,
             norm.logcdf((low - mu) / sigma),
@@ -397,6 +359,8 @@ class EnsemblePowerCurveForecaster:
         speed = self._corrected(X_train["wind_speed_80m"].to_numpy(float), X_train)
         self.curve_ = self._fit_curve(speed, y_train)
         self.emos_ = self._fit_emos(*self._out_of_fold_moments(X_train, y_train), y_train)
+        low, high = PHYSICAL_RANGE
+        self.range_ = (min(low, y_train.min()), max(high, y_train.max()))
         return self
 
     def _predictive(self, X: pd.DataFrame):
@@ -406,25 +370,37 @@ class EnsemblePowerCurveForecaster:
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:
         if self.emos_ is None:
-            return np.nanmean(self._through_curve(self._member_matrix(X)), axis=0)
-        return np.clip(self._predictive(X)[0], *PHYSICAL_RANGE)
+            return np.nanmean(self._through(self.curve_, self._member_matrix(X)), axis=0)
+        return self._censored_mean(*self._predictive(X))
+
+    @staticmethod
+    def _censored_mean(mu, sigma):
+        low, high = PHYSICAL_RANGE
+        a, b = (low - mu) / sigma, (high - mu) / sigma
+        return (
+            low * norm.cdf(a) + mu * (norm.cdf(b) - norm.cdf(a))
+            + sigma * (norm.pdf(a) - norm.pdf(b)) + high * norm.sf(b)
+        )
 
     def predict_with_interval(self, X: pd.DataFrame):
         if self.emos_ is None:
-            power = self._through_curve(self._member_matrix(X))
+            power = self._through(self.curve_, self._member_matrix(X))
             lower, upper = np.nanquantile(power, [self.alpha / 2, 1 - self.alpha / 2], axis=0)
             return np.nanmean(power, axis=0), lower, upper
 
         mu, sigma = self._predictive(X)
-        # The censored quantile is the latent quantile clipped, so this band stays in range.
-        lower = np.clip(mu + sigma * norm.ppf(self.alpha / 2), *PHYSICAL_RANGE)
-        upper = np.clip(mu + sigma * norm.ppf(1 - self.alpha / 2), *PHYSICAL_RANGE)
-        return np.clip(mu, *PHYSICAL_RANGE), lower, upper
+        # A quantile in a censored atom stands for every reading metered past that bound.
+        low, high = PHYSICAL_RANGE
+        lower = np.clip(mu + sigma * norm.ppf(self.alpha / 2), low, high)
+        upper = np.clip(mu + sigma * norm.ppf(1 - self.alpha / 2), low, high)
+        lower = np.where(lower == low, self.range_[0], lower)
+        upper = np.where(upper == high, self.range_[1], upper)
+        return self._censored_mean(mu, sigma), lower, upper
 
 
 @cache
 def _tabpfn_regressor_class():
-    """Authenticate once per process; a backtest would otherwise re-handshake per refit."""
+    """Authenticate once per process."""
     import tabpfn_client
     from tabpfn_client import TabPFNRegressor
 
@@ -440,11 +416,7 @@ def _tabpfn_regressor_class():
 
 
 class TabPFNForecaster:
-    """Hosted TabPFN. Feature rows leave the machine for the service.
-
-    The point forecast is the predictive mean, not the median, for the same reason as
-    LightGBM-QR: RMSE asks for the conditional mean.
-    """
+    """Hosted TabPFN, with the predictive mean as the point. Feature rows leave the machine."""
 
     def __init__(
         self,
@@ -475,14 +447,13 @@ class TabPFNForecaster:
         return np.asarray(self.model_.predict(X, output_type="mean"))
 
     def predict_with_interval(self, X: pd.DataFrame):
-        # "main" returns the mean and both tails in one request against a metered service.
         predicted = self.model_.predict(X, output_type="main", quantiles=self.tails)
         lower, upper = np.asarray(predicted["quantiles"])
         return _ordered_band(np.asarray(predicted["mean"]), lower, upper)
 
 
 class Schedule(NamedTuple):
-    """The backtest's timing, which every subject must share to stay comparable."""
+    """The backtest's timing, shared by every subject."""
 
     min_train_window: pd.Timedelta = MIN_TRAIN_WINDOW
     retrain_every: pd.Timedelta = RETRAIN_EVERY
@@ -506,12 +477,7 @@ def issue_times(
     test_end: pd.Timestamp,
     schedule: Schedule = Schedule(),
 ) -> pd.DatetimeIndex:
-    """One test window's issue times, restrided from the full settlement-period calendar.
-
-    Striding a model's own feature index would shift which half-hour lands on the grid and
-    desync that model from the others. The lower end is exclusive so consecutive windows
-    do not issue their shared boundary twice.
-    """
+    """One test window's issue times, strided from the full settlement-period calendar."""
     inside = (calendar_index > train_end) & (calendar_index <= test_end)
     return calendar_index[inside][:: schedule.issue_every]
 
@@ -602,11 +568,7 @@ def run_arima_backtest(
 
 
 def common_issue_times(forecasts: pd.DataFrame) -> pd.DataFrame:
-    """Restrict a backtest to the (issue_time, horizon) pairs every model produced, farm by farm.
-
-    Intersecting across farms would demand a pair both farms happened to issue, which is a
-    constraint on neither farm's protocol.
-    """
+    """Restrict a backtest to the (issue_time, horizon) pairs every model produced, farm by farm."""
     keys = ["issue_time", "horizon"]
 
     def shared_within(farm_forecasts: pd.DataFrame) -> pd.DataFrame:

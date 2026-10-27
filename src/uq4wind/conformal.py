@@ -34,15 +34,16 @@ class Interval(NamedTuple):
     upper: float
 
     def widened(self, q: float) -> "Interval":
+        if q <= (self.lower - self.upper) / 2:
+            midpoint = (self.lower + self.upper) / 2
+            return Interval(midpoint, midpoint)
         return Interval(self.lower - q, self.upper + q)
 
 
 def conformal_quantile(scores: NDArray, alpha: float) -> float:
-    """The ceil((n+1)(1-alpha))-th smallest score."""
+    """The ceil((n+1)(1-alpha))-th score, with rank capped to [1, n]."""
     n = len(scores)
-    rank = int(np.ceil((n + 1) * (1 - alpha)))
-    if rank >= n:
-        return float(np.max(scores))
+    rank = int(np.clip(np.ceil((n + 1) * (1 - alpha)), 1, n))
     return float(np.partition(scores, rank - 1)[rank - 1])
 
 
@@ -65,8 +66,8 @@ def _clip_level(level):
 
 
 def _step_level(level, gamma, alpha, miss):
-    """Tighten after a miss, loosen after a hit."""
-    return np.clip(level + gamma * (alpha - miss), 0.0, 1.0)
+    """Tighten after a miss, loosen after a hit. Unclipped; only the quantile lookup clips."""
+    return level + gamma * (alpha - miss)
 
 
 def _miscoverage_level(scores: NDArray, score: float) -> float:
@@ -88,11 +89,7 @@ class _Fixed:
 
 
 class _Adaptive:
-    """Base for rules that learn from feedback.
-
-    `interval` files the state it issued from and `update` consumes it oldest-first, so a
-    rule grades the interval it published rather than the state that has since replaced it.
-    """
+    """Base for rules that learn from feedback, graded on the interval they issued."""
 
     stratified = False
 
@@ -111,10 +108,7 @@ class OSSCP(_Fixed):
 
 
 class MondrianOSSCP(OSSCP):
-    """OSSCP calibrated inside the wind band the row falls in.
-
-    The rule is OSSCP unchanged; what makes it Mondrian is which scores the loop shows it.
-    """
+    """OSSCP calibrated within the row's wind band; the loop supplies that band's scores."""
 
     stratified = True
 
@@ -141,6 +135,7 @@ class ACI(_Adaptive):
 
     def interval(self, scores: NDArray, base: Interval) -> Interval:
         q = conformal_quantile(scores, float(_clip_level(self.alpha_t)))
+        q = max(q, (base.lower - base.upper) / 2)
         self._issued.append(q)
         return base.widened(q)
 
@@ -165,7 +160,7 @@ class _BOA:
         return float(self.probs @ expert_values)
 
     def update(self, expert_losses: NDArray, aggregate_loss: float) -> None:
-        instantaneous = aggregate_loss - expert_losses
+        instantaneous = expert_losses - aggregate_loss
         self.sq_regret += instantaneous**2
         self.max_regret = np.maximum(self.max_regret, np.abs(instantaneous))
         ranges = 2 ** (np.ceil(np.log2(self.max_regret + self.eps)) + 1)
@@ -175,7 +170,6 @@ class _BOA:
             + ranges * (self.etas * instantaneous > 0.5)
         )
 
-        # sq_regret is 0 on the first update; the minimum then takes the finite first term.
         with np.errstate(divide="ignore"):
             self.etas = np.minimum(1 / ranges, np.sqrt(np.log(self.k) / self.sq_regret))
 
@@ -200,6 +194,7 @@ class AgACI(_Adaptive):
         quantiles = np.array(
             [conformal_quantile(scores, a) for a in _clip_level(self.expert_alphas)]
         )
+        quantiles = np.maximum(quantiles, (base.lower - base.upper) / 2)
         lowers, uppers = base.lower - quantiles, base.upper + quantiles
 
         issued = Interval(self.lower_boa.predict(lowers), self.upper_boa.predict(uppers))
@@ -240,18 +235,22 @@ class DtACI(_Adaptive):
         probs = self.weights / self.weights.sum()
         alpha_t = float(_clip_level(probs @ self.expert_alphas))
 
-        self._issued.append((scores, self.expert_alphas.copy()))
+        quantiles = np.array([
+            max(conformal_quantile(scores, a), (base.lower - base.upper) / 2)
+            for a in _clip_level(self.expert_alphas)
+        ])
+        self._issued.append((scores, self.expert_alphas.copy(), quantiles))
         return base.widened(conformal_quantile(scores, alpha_t))
 
     def update(self, score: float, y: float) -> None:
-        scores, issued_alphas = self._issued.popleft()
+        scores, issued_alphas, quantiles = self._issued.popleft()
         beta = _miscoverage_level(scores, score)
 
         losses = self.alpha * (beta - issued_alphas) - np.minimum(0, beta - issued_alphas)
         pooled = self.weights * np.exp(-self.eta * losses)
         self.weights = (1 - self.sigma) * pooled / pooled.sum() + self.sigma / len(self.gammas)
 
-        misses = (issued_alphas > beta).astype(float)
+        misses = (score > quantiles).astype(float)
         self.expert_alphas = _step_level(self.expert_alphas, self.gammas, self.alpha, misses)
 
 
@@ -276,13 +275,15 @@ def run_online_conformal(
     calib_window: int = CALIB_WINDOW,
     feedback_delay: int = 1,
     strata: NDArray | None = None,
+    issue_steps: NDArray | None = None,
 ) -> dict[str, tuple[NDArray, NDArray]]:
     """Run every rule over one stream, each widening the base interval by a quantile of
 
         score_t = max(lower_base_t - y_t, y_t - upper_base_t)
 
     Equal bases give split conformal on the absolute residual; two tails give CQR.
-    `feedback_delay` holds each score back until its error was observable.
+    `feedback_delay` holds each score back until its error was observable. `issue_steps`
+    gives elapsed issue-grid steps when rows are missing; otherwise rows are consecutive.
 
     Returns {label: (lower, upper)}, each covering y[int(len(y) * warmup_frac):].
     """
@@ -293,8 +294,17 @@ def run_online_conformal(
     upper_base = y_pred if upper_base is None else np.asarray(upper_base, dtype=float)
 
     warmup = int(len(y) * warmup_frac)
-    if warmup < 1:
-        raise ValueError(f"warmup is {warmup}; an interval needs scores to take a quantile over")
+    if not 1 <= warmup < len(y):
+        raise ValueError("warmup must leave both calibration and evaluation rows")
+    if feedback_delay < 1 or calib_window < 1:
+        raise ValueError("feedback_delay and calib_window must be positive")
+    steps = np.arange(len(y)) if issue_steps is None else np.asarray(issue_steps)
+    if steps.shape != y.shape or not np.isfinite(steps).all() or np.any(np.diff(steps) <= 0):
+        raise ValueError("issue_steps must be finite and strictly increasing, one per outcome")
+    release = steps + feedback_delay
+    seed_end = int(np.searchsorted(release[:warmup], steps[warmup], side="right"))
+    if seed_end == 0:
+        raise ValueError("no warmup outcomes are observable at the first scored issue")
 
     stream_scores = np.maximum(lower_base - y, y - upper_base)
     missing = int((~np.isfinite(stream_scores)).sum())
@@ -308,21 +318,25 @@ def run_online_conformal(
             raise ValueError(f"rule {label!r} calibrates within strata, but none were given")
 
         buffer = np.empty(len(y), dtype=float)
-        buffer[:warmup] = stream_scores[:warmup]
-        n_scores = warmup
+        buffer[:seed_end] = stream_scores[:seed_end]
+        n_scores = seed_end
 
         by_stratum: dict[object, deque] = defaultdict(lambda: deque(maxlen=calib_window))
         if rule.stratified:
-            for i in range(warmup):
+            for i in range(seed_end):
                 by_stratum[strata[i]].append(float(stream_scores[i]))
 
-        pending: deque[tuple[int, int, float, float]] = deque()
+        pending = deque(
+            (release[i], i, float(stream_scores[i]), float(y[i]))
+            for i in range(seed_end, warmup)
+        )
         lowers, uppers = [], []
 
         for t in range(warmup, len(y)):
-            while pending and pending[0][0] <= t:
+            while pending and pending[0][0] <= steps[t]:
                 _, i, score, y_obs = pending.popleft()
-                rule.update(score, y_obs)
+                if i >= warmup:
+                    rule.update(score, y_obs)
                 buffer[n_scores] = score
                 n_scores += 1
                 if rule.stratified:
@@ -338,7 +352,7 @@ def run_online_conformal(
             lowers.append(lower)
             uppers.append(upper)
 
-            pending.append((t + feedback_delay, t, float(stream_scores[t]), float(y[t])))
+            pending.append((release[t], t, float(stream_scores[t]), float(y[t])))
 
         arms[label] = (np.array(lowers), np.array(uppers))
     return arms
