@@ -12,9 +12,10 @@ dependencies = [
     "lightgbm>=4.6.0",
     "matplotlib>=3.9.1",
     "numpy>=2.3.2",
-    # Upper bounds track tabpfn-client's pins, so the hosted subject stays usable here.
+    # Upper bounds track tabpfn-client's pins.
     "pandas>=2.1.2,<=2.3.3",
     "pyarrow>=14.0.0,<=23.0.1",
+    "scikit-learn>=1.6",
     "scipy>=1.15.2",
     "statsmodels>=0.14.4",
 ]
@@ -27,10 +28,10 @@ uq4wind-backtest = "uq4wind.cli.run_backtest:main"
 where = ["src"]
 
 [dependency-groups]
-# Only scripts/prepare_data.py needs these.
+# uq4wind-prepare, to rebuild the GEFS grid.
 data = ["dask>=2026.7.1", "dynamical-catalog>=0.8.0", "xarray>=2026.7.0"]
 
-# Only scripts/run_tabpfn.py needs this, and it needs an API key.
+# uq4wind-backtest --tabpfn, with an API key.
 tabpfn = ["tabpfn-client>=0.4.1"]
 
-notebooks = ["marimo>=0.24.0"]
+notebooks = ["jinja2>=3.1", "marimo>=0.24.0"]

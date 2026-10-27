@@ -1,9 +1,9 @@
 """Turn raw SCADA and the GEFS archive into the parquet everything else reads.
 
 Usage:
-    python scripts/prepare_data.py kelmarsh --raw data/raw/kelmarsh
-    python scripts/prepare_data.py kelmarsh --nwp-only
-    python scripts/prepare_data.py kelmarsh --era5-only
+    uq4wind-prepare kelmarsh --raw data/raw/kelmarsh
+    uq4wind-prepare kelmarsh --nwp-only
+    uq4wind-prepare kelmarsh --era5-only
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ def main() -> None:
         for turbine, raw in scada.items():
             cleaned = D.clean_scada(raw, logs[turbine])
             resampled[turbine] = D.resample_scada(cleaned)
+            resampled[turbine].to_parquet(PROCESSED / f"{args.farm}_{turbine}_30min.parquet")
             kept = 100 * len(cleaned) / len(raw)
             print(f"  {turbine}: {len(raw):>7} rows -> {kept:.1f}% survive cleaning")
 
