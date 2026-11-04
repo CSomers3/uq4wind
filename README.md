@@ -1,21 +1,26 @@
 # uq4wind
 
-Conformalise native uncertainty quantification (UQ) bands for more reliable wind power forecasts - regardless of your underlying model
-![conformalised_native_uq](https://github.com/CSomers3/uq4wind/blob/main/conforming.png)
+Code for *The Cost of Coverage: Conformalising Native Forecast Uncertainty for GB Wind Power*
+(AI for Power Grids, NeurIPS 2026).
 
+## Installation
 
-#### Installation
+Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone https://github.com/CSomers3/uq4wind.git
 cd uq4wind
-pip install -e .
+uv sync --group notebooks
 ```
 
-<div align="center">
+## Usage
 
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+Prepare the inputs following [data/README.md](data/README.md), then run:
 
-</div>
+```bash
+cd notebooks
+uv run python 01_scorecard.py
+uv run python 02_regime.py
+```
 
+The notebooks write figures and tables to `results/`.

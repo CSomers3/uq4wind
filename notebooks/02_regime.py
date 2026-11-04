@@ -111,41 +111,40 @@ def _(mo):
     mo.md(r"""
     ## 3. Coverage by realised regime
 
-    Pooled over the six forecasters. Mondrian is split by whether the forecast named the regime
-    that occurred: when it did not, high-wind coverage collapses.
+    Both farms and the six forecasters pooled, split by whether the forecast named the regime that
+    occurred. Every band uses the same periods: when the forecast was wrong, high-wind coverage
+    collapses for all of them.
     """)
     return
 
 
 @app.cell
-def _(E, Line2D, RESULTS, WIDTH, day_ahead, plt):
-    _MONDRIAN = "#d94801"
-    _method = day_ahead["method"]
-    _lines = {
-        "Native band": (_method == "native", dict(color="#9ecae1", ls="-", mfc="#9ecae1")),
-        "OSSCP band": (_method == "osscp", dict(color="#08519c", ls="-", mfc="#08519c")),
-        "Mondrian, regime right": ((_method == "mondrian") & day_ahead["regime_right"],
-                                   dict(color=_MONDRIAN, ls="-", mfc=_MONDRIAN)),
-        "Mondrian, regime wrong": ((_method == "mondrian") & ~day_ahead["regime_right"],
-                                   dict(color=_MONDRIAN, ls=(0, (3, 2)), mfc="white")),
-    }
-    _STYLE = dict(marker="o", ms=4.5, mec="0.35", mew=0.5, lw=1.0)
+def _(E, RESULTS, WIDTH, day_ahead, plt):
+    _LINES = {"native": ("Native", "#9ecae1", "#5b9cc8"), "osscp": ("OSSCP", "#08519c", "#08519c"),
+              "mondrian": ("Mondrian", "#d94801", "#d94801")}  # name, line colour, label colour
+    _STYLE = dict(marker="o", ms=4.5, mec="0.35", mew=0.5, lw=1.2, solid_capstyle="round")
+    _coverage = day_ahead.groupby(["regime_right", "band_realised", "method"], observed=True)["hit"].mean()
 
-    figure_regime, _panels = plt.subplots(1, len(E.FARM_NAMES), figsize=(WIDTH, 1.65), sharey=True)
-    for _panel, _farm in zip(_panels, E.FARM_NAMES):
-        for _mask, _style in _lines.values():
-            _rows = day_ahead[_mask & (day_ahead["farm"] == _farm)]
-            _coverage = _rows.groupby("band_realised", observed=True)["hit"].mean().reindex(E.WIND_LABELS)
-            _panel.plot(range(3), _coverage.to_numpy(), **_STYLE, **_style)
-        _panel.axhline(0.9, color="0.35", lw=0.7, ls=(0, (4, 3)), zorder=0)
-        _panel.set_xticks(range(3), [_l.replace(" (", "\n(").replace("-", "–") for _l in E.WIND_LABELS])
+    figure_regime, _panels = plt.subplots(1, 2, figsize=(WIDTH, 1.6), sharey=True)
+    for _panel, _right in zip(_panels, (True, False)):
+        _panel.axhline(0.9, color="0.55", lw=0.6, ls=(0, (4, 3)), zorder=0)
+        for _m, (_name, _c, _text) in _LINES.items():
+            _y = _coverage[_right].xs(_m, level="method").reindex(E.WIND_LABELS).to_numpy()
+            _panel.plot(range(3), _y, color=_c, mfc=_c, zorder=3 if _m == "mondrian" else 2, **_STYLE)
+            if _right:
+                _panel.annotate(_name, (2, _y[-1]), xytext=(7, 0), textcoords="offset points", va="center",
+                                fontsize=7, color=_text, bbox=dict(fc="white", ec="none", pad=0.8))
+        _panel.set_xticks(range(3), [_l.replace(" (", "\n").replace(")", "").replace("-", "–") for _l in E.WIND_LABELS])
+        _panel.tick_params(axis="x", length=0, pad=3)
+        _panel.spines["bottom"].set_color("0.6")
         _panel.set_xlim(-0.3, 2.3)
-        _panel.set_title(_farm.capitalize(), pad=3)
+        _panel.set_title(f"Regime forecast {'right' if _right else 'wrong'}", pad=4)
+    _panels[1].annotate("90%", (2.3, 0.9), xytext=(0, 2), textcoords="offset points", ha="right", va="bottom",
+                        fontsize=6.5, color="0.5")
+    _panels[0].set_ylim(0.5, 1.0)
+    _panels[0].set_yticks([0.5, 0.6, 0.7, 0.8, 0.9, 1.0], ["0.5", "", "0.7", "", "0.9", ""])
     _panels[0].set_ylabel("Coverage at 24 h")
-    _panels[0].set_ylim(0.45, 1.0)
-    figure_regime.tight_layout(rect=(0, 0, 1, 0.86), w_pad=1.5)
-    figure_regime.legend(handles=[Line2D([], [], label=k, **_STYLE, **s) for k, (_, s) in _lines.items()],
-                   loc="upper center", bbox_to_anchor=(0.5, 1.0), ncol=4, frameon=False)
+    figure_regime.tight_layout(w_pad=3.0)
     figure_regime.savefig(RESULTS / "figure2_realised_regime.pdf")
     figure_regime
     return
@@ -251,7 +250,14 @@ def _(HIGH, day_ahead, missed_energy):
         means = day_ahead.groupby(["farm", "method"])[["miss", "width"]].mean().unstack("method")
         mondrian_rows = day_ahead[day_ahead["method"] == "mondrian"]
         realised = mondrian_rows.groupby(["farm", "regime_right", "band_realised"], observed=True)["hit"].mean()
+        same_rows = day_ahead[day_ahead["method"].isin(["osscp", "mondrian"])]
+        same_rows = same_rows.groupby(["farm", "band_realised", "regime_right", "method"], observed=True)["hit"].mean()
+        periods = mondrian_rows.groupby(["farm", "band_realised", "regime_right"], observed=True)["issue_time"].nunique()
         return "\n".join([
+            "24 h coverage by realised regime, right/wrong regime forecast:",
+            same_rows.unstack("method").round(2).to_string(),
+            "unique settlement periods per right/wrong group:",
+            periods.unstack("regime_right").to_string(),
             "24 h, realised high wind, OSSCP:",
             f"  share of periods {osscp['Periods'].round(3).to_dict()}",
             f"  share of missed energy {osscp['Energy share'].round(3).to_dict()}",
