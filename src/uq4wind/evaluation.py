@@ -197,11 +197,10 @@ def wind_ledger(evaluated: pd.DataFrame, alpha: float = ALPHA) -> pd.DataFrame:
 
 def load_stream(farm: str) -> pd.DataFrame:
     """Every subject's forecasts, cut to the issue times all of them produced."""
-    parts = [pd.read_parquet(PROCESSED / f"{farm}_forecasts.parquet")]
-    tabpfn = PROCESSED / f"{farm}_tabpfn_forecasts.parquet"
-    if tabpfn.exists():
-        parts.append(pd.read_parquet(tabpfn))
-    stream = pd.concat(parts, ignore_index=True)
+    stream = pd.concat([
+        pd.read_parquet(PROCESSED / f"{farm}_forecasts.parquet"),
+        pd.read_parquet(PROCESSED / f"{farm}_tabpfn_forecasts.parquet"),
+    ], ignore_index=True)
     return common_issue_times(stream[stream["horizon"].isin(HORIZONS)])
 
 
