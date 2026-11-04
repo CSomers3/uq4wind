@@ -3,6 +3,8 @@
 Code for *The Cost of Coverage: Conformalising Native Forecast Uncertainty for GB Wind Power*
 (AI for Power Grids, NeurIPS 2026).
 
+![Native and conformalised prediction intervals](conforming.png)
+
 ## Installation
 
 Python 3.12+ and [uv](https://docs.astral.sh/uv/).
