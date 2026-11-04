@@ -1,45 +1,18 @@
 # Data
 
-Generate the data locally with the commands below. Raw files, processed parquet and notebook
-outputs are excluded from version control.
-
 ## Sources
 
-- SCADA: [Kelmarsh](https://doi.org/10.5281/zenodo.16807551) and
-  [Penmanshiel](https://doi.org/10.5281/zenodo.16807304), Plumley and Takeuchi (2025), CC-BY-4.0.
-  Extract each archive, including turbine data and status logs, into `raw/<farm>/`.
-  Keep the original CSV names and headers; the loader searches subdirectories.
-- Forecast weather: [NOAA GEFS via dynamical.org](https://dynamical.org/catalog/noaa-gefs-forecast-35-day/),
-  dataset `noaa-gefs-forecast-35-day`. The preparation command retrieves 31 members at the farm
-  centroid, using daily 00Z runs and 3-hourly leads through 96 hours.
-- Realised wind: [ERA5 via Open-Meteo](https://open-meteo.com/en/docs/historical-weather-api),
-  hourly wind at 100 m, scaled to 80 m by `(80/100)**(1/7)` and interpolated to 30 minutes.
-  This is used only for retrospective regime evaluation.
+- SCADA: [Kelmarsh](https://doi.org/10.5281/zenodo.16807551) and [Penmanshiel](https://doi.org/10.5281/zenodo.16807304), Plumley and Takeuchi (2025), CC-BY-4.0.
+- Forecast weather: [NOAA GEFS](https://dynamical.org/catalog/noaa-gefs-forecast-35-day/), dataset `noaa-gefs-forecast-35-day`.
+- Realised wind: [ERA5 via Open-Meteo](https://open-meteo.com/en/docs/historical-weather-api).
 
-## Cleaning
+## Preparation
 
-`uq4wind-prepare` keeps available SCADA records, removes duplicate timestamps, and excludes
-periods logged as Stop, Warning or Curtailment. It also excludes wind speeds at or below
-0.1 m/s, nonzero curtailment energy, and power setpoints below 99% of potential power.
-
-Each turbine is averaged to 30-minute periods. Farm capacity factor is the mean reporting
-turbine power divided by 2,050 kW, where at least half the farm reports: 3 of 6 turbines at
-Kelmarsh or 7 of 14 at Penmanshiel. Excluded periods remain missing; targets are neither
-interpolated nor clipped to [0, 1].
-
-The backtest aligns GEFS to each target with a six-hour publication lag. Training targets are
-purged by horizon, and calibration waits until each target settlement period has closed.
-
-## Build
-
-Run from the repository root after installing the dependencies in the main README:
+Extract the SCADA archives, including status logs, into `data/raw/<farm>/`. Preserve the CSV names and headers. Run from the repository root:
 
 ```bash
-uv run uq4wind-prepare kelmarsh --raw data/raw/kelmarsh --scada-only
-uv run uq4wind-prepare penmanshiel --raw data/raw/penmanshiel --scada-only
 for farm in kelmarsh penmanshiel; do
-    uv run --group data uq4wind-prepare "$farm" --nwp-only
-    uv run uq4wind-prepare "$farm" --era5-only
+    uv run --group data uq4wind-prepare "$farm" --raw "data/raw/$farm"
 done
 uv run uq4wind-backtest kelmarsh
 uv run uq4wind-backtest penmanshiel --min-train-window 365D
@@ -47,32 +20,24 @@ TABPFN_API_KEY=... uv run --group tabpfn uq4wind-backtest kelmarsh --tabpfn
 TABPFN_API_KEY=... uv run --group tabpfn uq4wind-backtest penmanshiel --tabpfn --min-train-window 365D
 ```
 
-Weather retrieval covers 2022-2024, set in `src/uq4wind/cli/prepare_data.py`. TabPFN calls a hosted,
-metered service and saves checkpoints locally; rerunning it may depend on the service's model version.
+Preparation removes duplicates, unavailable records, logged stops/warnings/curtailment, wind speeds <=0.1 m/s, nonzero curtailment energy and setpoints below 99% of potential power. SCADA is averaged to 30 minutes. Farm capacity factor averages reporting turbine power divided by 2,050 kW, requiring at least half the farm. Missing targets remain NaN; values are not clipped.
 
-## Required format
+Weather retrieval covers 2022-2024. GEFS uses 31 members and daily 00Z runs; forecasting applies a six-hour publication lag. ERA5 wind is scaled from 100 m to 80 m by `(80/100)**(1/7)` and interpolated to 30 minutes for retrospective evaluation. TabPFN uses a metered API.
 
-Write these files into `data/processed/` for each `<farm>` (`kelmarsh` or `penmanshiel`).
-Use UTC timestamps. The 30-minute time indexes must be sorted, unique and regular, with
-missing observations represented as NaN.
+## File format
 
-| File suffix after `<farm>_` | Index | Columns |
+Files belong in `data/processed/`, prefixed with `kelmarsh_` or `penmanshiel_`. Timestamps are UTC; 30-minute indexes are sorted, unique and regular.
+
+| Suffix | Index | Columns |
 |---|---|---|
-| `capacity_factor_30min.parquet` | 30-minute DatetimeIndex | `capacity_factor` |
-| `gefs_grid.parquet` | MultiIndex: `init_time`, `valid_time`, `ensemble_member` | Weather columns below |
-| `era5_wind_30min.parquet` | 30-minute DatetimeIndex | `wind_speed_realised` (m/s) |
-| `forecasts.parquet` | Default row index | Forecast columns below; five self-hosted models |
-| `tabpfn_forecasts.parquet` | Default row index | Same forecast columns; `model = tabpfn` |
+| `capacity_factor_30min.parquet` | DatetimeIndex | `capacity_factor` |
+| `gefs_grid.parquet` | `init_time`, `valid_time`, `ensemble_member` | GEFS columns below |
+| `era5_wind_30min.parquet` | DatetimeIndex | `wind_speed_realised` (m/s) |
+| `forecasts.parquet` | Row index | Forecast columns below |
+| `tabpfn_forecasts.parquet` | Row index | Same; `model = tabpfn` |
 
-GEFS columns: `wind_u_80m`, `wind_v_80m`, `wind_speed_80m` (m/s), `temperature_80m` (C),
-`pressure_80m` (Pa), `precipitation_surface`, and `nwp_lead_hours`.
-`ensemble_member` runs from 0 to 30; `valid_time = init_time + lead_time`.
+GEFS columns: `wind_u_80m`, `wind_v_80m`, `wind_speed_80m` (m/s), `temperature_80m` (C), `pressure_80m` (Pa), `precipitation_surface`, `nwp_lead_hours`. The index is a MultiIndex; members are numbered 0-30.
 
-Forecast columns: `farm`, `model`, `issue_time`, `horizon`, `y_true`, `y_pred`, `y_lower`, `y_upper`.
-Horizons are integers in settlement periods: 1, 6 and 48. Predictions, targets and endpoints are
-capacity factors; endpoints must be ordered. Each `(farm, model, issue_time, horizon)` is unique,
-and `y_true` must equal the target at `issue_time + horizon * 30 minutes`.
-`issue_time` left-labels the latest observed SCADA period; physical issuance is at its end.
+Forecast columns: `farm`, `model`, `issue_time`, `horizon`, `y_true`, `y_pred`, `y_lower`, `y_upper`. Horizons are 1, 6 or 48 half-hours; targets and predictions are capacity factors, with ordered endpoints. Each `(farm, model, issue_time, horizon)` is unique. `y_true` equals capacity factor at `issue_time + horizon * 30 minutes`; issuance is at the end of the period labelled by `issue_time`.
 
-The five model names are `persistence`, `arima`, `lgbm_qr`, `bootstrap` and `gefs_power_curve`.
-The notebooks require all six models and compare them on common issue-time/horizon pairs.
+Model names: `persistence`, `arima`, `lgbm_qr`, `bootstrap`, `gefs_power_curve`, `tabpfn`. The notebooks compare all six on common issue-time/horizon pairs.
