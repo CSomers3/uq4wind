@@ -1,7 +1,7 @@
 # uq4wind
 
 Code for *The Cost of Coverage: Conformalising Native Forecast Uncertainty for GB Wind Power*
-(AI for Power Grids, NeurIPS 2026).
+(AI for Power Grids, NeurIPS 2026). Paper: [arXiv:2611.09815](https://arxiv.org/abs/2611.09815).
 
 ![Native and conformalised prediction intervals](conforming.png)
 
